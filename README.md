@@ -167,6 +167,10 @@ execute:
 
 <img width="1919" height="1024" alt="image" src="https://github.com/user-attachments/assets/d819efef-bc1a-47bc-b621-0037b2605a25" />
 
+## unpackme4
+
+lỗi!
+
 ## unpackme5
 
 <img width="671" height="582" alt="image" src="https://github.com/user-attachments/assets/7c68a981-c4d4-48e7-a004-0fb8d1e04d8a" />
@@ -257,6 +261,29 @@ Tuy nhiên vì khi dump ta chưa trỏ oep đúng nên cần fix entrypoint:
 
 <img width="1919" height="1029" alt="image" src="https://github.com/user-attachments/assets/c28f4795-a1b8-406c-97d5-96c6a9204809" />
 
+## unpackme7
+
+<img width="721" height="624" alt="image" src="https://github.com/user-attachments/assets/35166d4b-a804-4dc4-92f2-af78f15507ab" />
+
+ta chạy sẵn chương trình rồi attach vào, fuzzing tìm oep
+
+tìm được oep:
+
+<img width="1919" height="1024" alt="image" src="https://github.com/user-attachments/assets/66004661-bedc-4722-ba37-64e6dff6ee36" />
+
+<img width="589" height="645" alt="image" src="https://github.com/user-attachments/assets/b62d6238-ed0e-4a89-9002-77ef32ca489e" />
+
+<img width="776" height="339" alt="image" src="https://github.com/user-attachments/assets/aab6fee2-70c2-486f-b9b3-908cdbec9f19" />
+
+vì IAT có thunk đến API nên ta sẽ không bỏ mà phải fix nó
+
+<img width="596" height="644" alt="image" src="https://github.com/user-attachments/assets/00e35d70-f485-444f-b3bd-2bd1cda9bf82" />
+
+<img width="1914" height="1032" alt="image" src="https://github.com/user-attachments/assets/fd91e32d-1db7-4f08-bd28-fc5f21c844b5" />
+
+<img width="1911" height="1028" alt="image" src="https://github.com/user-attachments/assets/4ed45cc4-7d6f-49bb-a0f4-978a5d06e917" />
+
+
 
 
 ## unpackme8
@@ -328,7 +355,7 @@ Tuy nhiên một số API còn bị nuốt hẳn vào thunk mà không đến đ
 
 <img width="976" height="102" alt="image" src="https://github.com/user-attachments/assets/7076f6fa-6e8c-4752-981c-b55de26e28cc" />
 
-Ta có thể dump luôn section này ra chung với pe để chương trình cô thể gọi vào.
+Ta có thể dump luôn section này ra chung với pe để chương trình có thể gọi vào.
 
 Ý tưởng:
 - Tìm các call tương đối `0xe8` và phải call ra ngoài section khác (để tránh nhầm với call hàm thông thường)
@@ -575,6 +602,8 @@ Về lý thuyết thì đến đây đã gần xong vì gần như đã fix đư
 ta thấy chương trình push args vào stack nhưng lại call 2 lần, dẫn đến sai args
 
 chỉ cần sửa lại thành jmp là được 
+
+<img width="638" height="486" alt="image" src="https://github.com/user-attachments/assets/d8c0e960-ee68-4834-a362-7f0d3c4b80d5" />
 
 
 
