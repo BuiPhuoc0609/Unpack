@@ -259,6 +259,324 @@ Tuy nhiên vì khi dump ta chưa trỏ oep đúng nên cần fix entrypoint:
 
 
 
+## unpackme8
+
+<img width="724" height="628" alt="image" src="https://github.com/user-attachments/assets/044f9079-e348-418b-a874-759441e56cf5" />
+
+
+<img width="1919" height="1027" alt="image" src="https://github.com/user-attachments/assets/0a41bb2a-afd0-408f-b8d4-781e358ce43f" />
+
+Bài này ta nhận thấy chương trình VirtualAlloc khá nhiều lần và thực thực thi code trong đó
+
+Để tìm oep ta cho `break on access` ở 1 section được alloc rồi lại `break on access` tại section chứa code của pe bị pack:
+
+<img width="720" height="404" alt="image" src="https://github.com/user-attachments/assets/32e22c6f-74b8-412f-a1ba-3c067244c4b2" />
+
+<img width="730" height="408" alt="image" src="https://github.com/user-attachments/assets/605838c9-f142-40ac-85aa-abb9905ca081" />
+
+Dặt breakpoint lại section được alloc
+
+<img width="567" height="238" alt="image" src="https://github.com/user-attachments/assets/f66f0bac-5352-47b6-8f3c-d173525688d2" />
+
+<img width="1329" height="446" alt="image" src="https://github.com/user-attachments/assets/c0a3a8c2-e224-477e-97ef-11a0c449dddd" />
+
+ta gỡ breakpoint tại đây và đặt breakpoint tại section được chương trình unpack pe file ra:
+
+<img width="1311" height="451" alt="image" src="https://github.com/user-attachments/assets/4a86bafd-5698-40a1-9db4-b0581db1a5f9" />
+
+<img width="1341" height="412" alt="image" src="https://github.com/user-attachments/assets/5b6908ed-eba6-4254-8f44-dd1040b4e917" />
+
+<img width="1339" height="439" alt="image" src="https://github.com/user-attachments/assets/05b6effe-ac38-4235-8190-ba97451b1472" />
+
+Ta đã đên được oep
+
+dump and fix import:
+
+Ta thử dump và fix dump bằng scylla:
+
+<img width="591" height="638" alt="image" src="https://github.com/user-attachments/assets/db036aa1-d0e7-4b30-9e4c-ff0b4f4a6ce4" />
+
+<img width="415" height="262" alt="image" src="https://github.com/user-attachments/assets/832f15d4-5362-4244-9bd7-c3f7744714c0" />
+
+mở ida để biết tại sao:
+
+<img width="1919" height="1029" alt="image" src="https://github.com/user-attachments/assets/d4b63a47-cf4d-499a-a190-0b96145baad1" />
+
+<img width="1919" height="1032" alt="image" src="https://github.com/user-attachments/assets/c9c7c619-c536-45ad-a192-9f2fe8e32f7c" />
+
+Ta thấy phần lớn import đã được fix khá ok, tuy nhiên một số API chưa được fix
+
+kiểm tra trên mem gốc:
+
+<img width="1003" height="219" alt="image" src="https://github.com/user-attachments/assets/bb6b5b55-bcd7-479c-b483-77460d22033c" />
+
+<img width="515" height="130" alt="image" src="https://github.com/user-attachments/assets/d412013f-29e2-4b1e-8755-6cdf22bcc592" />
+
+<img width="880" height="158" alt="image" src="https://github.com/user-attachments/assets/5b33a167-201b-4e92-b6bb-cbc56d420599" />
+
+<img width="970" height="323" alt="image" src="https://github.com/user-attachments/assets/10849332-c20e-4c2c-ab9a-2b9d36a74e66" />
+
+Thấy rằng chương trình thay vì call thẳng đến API thì một phần api bị đưa vào các thunk, nối nhau bằng jmp và push + ret khiến cho việc xác định API được gọi khá khó khăn 
+
+Ta có thể trace theo push/jmp để đến được section có chứa .dll rồi lấy symbols export tại đó để xác định API được gọi là gì
+
+Tuy nhiên một số API còn bị nuốt hẳn vào thunk mà không đến được section .dll như sau:
+
+<img width="576" height="128" alt="image" src="https://github.com/user-attachments/assets/061a49cf-b050-4601-9ebc-1727de9cf253" />
+
+<img width="785" height="187" alt="image" src="https://github.com/user-attachments/assets/e2350318-43d1-4f93-bc58-41d224489e39" />
+
+<img width="976" height="102" alt="image" src="https://github.com/user-attachments/assets/7076f6fa-6e8c-4752-981c-b55de26e28cc" />
+
+Ta có thể dump luôn section này ra chung với pe để chương trình cô thể gọi vào.
+
+Ý tưởng:
+- Tìm các call tương đối `0xe8` và phải call ra ngoài section khác (để tránh nhầm với call hàm thông thường)
+- trace các ins theo push-ret và jmp để tìm đến section có chứa `.dll`, khi đến nơi ta duyệt ngược lên để lấy tên API (vì bị gọi vào giữa hàm)
+- duyệt các API để lấy các import không bị obfuscate kết hợp với các API vừa rồi để fix IAT
+- trong IAT, các API đã được resolve sẵn và các địa chỉ trỏ đến ntdll nhưng không có symbols thì ta giữ nguyên vị trí, các vị trí thừa thì sẽ ghi các API mới tìm được vào
+- patch các call tương đối trên thành call tuyệt đối `0xff` để call vào IAT
+
+
+script fix iat:
+
+```python
+import idaapi
+import idc
+import ida_bytes
+import ida_segment
+import ida_name
+import ida_ua
+
+START = 0x401000
+END   = 0x40C000
+
+IAT_START = 0x40C008
+IAT_SIZE  = 0x134
+
+MAX_TRACE_STEPS = 512
+visited_global  = {}
+
+def seg_name(ea):
+    s = ida_segment.getseg(ea)
+    return ida_segment.get_segm_name(s) if s else None
+
+def is_in_code_seg(ea):
+    s = ida_segment.getseg(START)
+    return bool(s) and (s.start_ea <= ea < s.end_ea)
+
+def dll_prefix(ea):
+    n = seg_name(ea)
+    if not n:
+        return None
+    nl = n.lower()
+    if nl.endswith(".dll"):
+        return nl[:-4]
+    return None
+
+def is_dll_seg(ea):
+    return dll_prefix(ea) is not None
+
+def get_raw_name(ea):
+    for getter in (ida_name.get_ea_name, idc.get_name, idc.get_func_name):
+        try:
+            n = getter(ea)
+        except TypeError:
+            n = getter(ea, 0) if getter is ida_name.get_ea_name else None
+        if n:
+            return n
+    return None
+
+def resolve_in_dll(ea, back=128):
+    prefix = dll_prefix(ea)
+    if not prefix:
+        return None, None
+    needle = prefix + "_"
+    for off in range(0, back + 1):
+        cur = ea - off
+        if dll_prefix(cur) != prefix:
+            break
+        n = get_raw_name(cur)
+        if n and n.lower().startswith(needle):
+            return n, cur
+    return None, None
+
+def decode(ea):
+    insn = ida_ua.insn_t()
+    return insn if ida_ua.decode_insn(insn, ea) > 0 else None
+
+def trace_chain(start_ea):
+    ea = start_ea
+    steps = 0
+    seen = set()
+
+    while steps < MAX_TRACE_STEPS:
+        steps += 1
+        if ea is None or ea == idaapi.BADADDR:
+            return None, None
+
+        if is_dll_seg(ea):
+            name, name_ea = resolve_in_dll(ea)
+            if name:
+                return name, name_ea
+
+        if ea in seen:
+            return None, None
+        seen.add(ea)
+
+        insn = decode(ea)
+        if insn is None:
+            return None, None
+
+        mnem = insn.get_canon_mnem().lower()
+        op0  = insn.ops[0]
+
+        if mnem == "jmp":
+            if op0.type in (idaapi.o_near, idaapi.o_far):
+                ea = op0.addr
+                continue
+            if op0.type == idaapi.o_mem:
+                tgt = op0.addr
+                if is_dll_seg(tgt):
+                    return resolve_in_dll(tgt)
+                ptr = ida_bytes.get_dword(tgt)
+                if ptr:
+                    ea = ptr
+                    continue
+                return None, None
+            return None, None
+
+        if mnem == "push":
+            nxt = decode(ea + insn.size)
+            if nxt and nxt.get_canon_mnem().lower() in ("ret", "retn", "retf"):
+                tgt = None
+                if op0.type == idaapi.o_imm:
+                    tgt = op0.value & 0xFFFFFFFF
+                elif op0.type in (idaapi.o_near, idaapi.o_far, idaapi.o_mem):
+                    tgt = op0.addr & 0xFFFFFFFF
+                if tgt:
+                    ea = tgt
+                    continue
+            ea += insn.size
+            continue
+
+        ea += insn.size
+
+    return None, None
+
+def read_existing_iat():
+    name2slot = {}
+    free_slots = []
+    for slot in range(IAT_START, IAT_START + IAT_SIZE, 4):
+        ptr = ida_bytes.get_dword(slot)
+        name = None
+        prefix = None
+        if ptr:
+            name, _ = resolve_in_dll(ptr)
+            prefix = dll_prefix(ptr)
+        if name:
+            if name not in name2slot:
+                name2slot[name] = slot
+        elif prefix == "ntdll":
+            continue
+        else:
+            free_slots.append(slot)
+    return name2slot, free_slots
+
+def ensure_iat_slot(name, api_ea, name2slot, state):
+    if name in name2slot:
+        return name2slot[name]
+    if state["free"]:
+        slot = state["free"].pop(0)
+    else:
+        slot = state["overflow"]
+        state["overflow"] = slot + 4
+    ida_bytes.patch_dword(slot, api_ea)
+    idc.set_name(slot, "IAT_" + name, idc.SN_NOWARN | idc.SN_NOCHECK)
+    name2slot[name] = slot
+    return slot
+
+def patch_call_to_iat(call_ea, slot_ea):
+    ida_bytes.patch_byte(call_ea, 0xFF)
+    ida_bytes.patch_byte(call_ea + 1, 0x15)
+    ida_bytes.patch_dword(call_ea + 2, slot_ea & 0xFFFFFFFF)
+
+def main():
+    print("[*] Scan {:#x}..{:#x} for obfuscated E8 calls".format(START, END))
+    resolved = []
+    ea = START
+    while ea < END:
+        if ida_bytes.get_byte(ea) == 0xE8:
+            insn = decode(ea)
+            if insn and insn.get_canon_mnem().lower() == "call":
+                op0 = insn.ops[0]
+                if op0.type in (idaapi.o_near, idaapi.o_far):
+                    target = op0.addr
+                    if not is_in_code_seg(target):
+                        if ea in visited_global:
+                            entry = visited_global[ea]
+                        else:
+                            entry = trace_chain(target)
+                            visited_global[ea] = entry
+                        name, api_ea = entry
+                        if name and api_ea:
+                            resolved.append((ea, name, api_ea))
+                            print("  {:#010x}  call {:#010x}  ->  {}  @{:#010x}".format(
+                                ea, target, name, api_ea))
+                        else:
+                            print("  {:#010x}  call {:#010x}  ->  <unresolved>".format(ea, target))
+                ea += insn.size
+                continue
+        ea += 1
+    print("[*] Resolved {} wrapper calls".format(len(resolved)))
+
+    print("[*] Scan existing IAT [{:#x}..{:#x})".format(IAT_START, IAT_START + IAT_SIZE))
+    name2slot, free_slots = read_existing_iat()
+    print("    kept API entries : {}".format(len(name2slot)))
+    print("    free slots       : {}".format(len(free_slots)))
+
+    state = {"free": free_slots, "overflow": IAT_START + IAT_SIZE}
+    new_slots = 0
+    patched   = 0
+    for call_ea, name, api_ea in resolved:
+        before = len(name2slot)
+        slot = ensure_iat_slot(name, api_ea, name2slot, state)
+        if len(name2slot) > before:
+            new_slots += 1
+            print("  + IAT slot {:#x} = {} ({:#x})".format(slot, name, api_ea))
+        patch_call_to_iat(call_ea, slot)
+        idc.set_cmt(call_ea, "call ds:[{:#x}] ; {}".format(slot, name), 0)
+        patched += 1
+
+    print("[*] {} new IAT slots filled, {} calls patched".format(new_slots, patched))
+    print("[*] IAT range [{:#x}..{:#x}), overflow up to {:#x}".format(
+        IAT_START, IAT_START + IAT_SIZE, state["overflow"]))
+
+if __name__ == "__main__":
+    main()
+```
+
+Ta dump các section chung với PE, nơi mà các API bị nuốt vào thunk không tìm được symbols
+
+<img width="1919" height="1032" alt="image" src="https://github.com/user-attachments/assets/8468faaa-a5fa-471e-906a-c1d8c7d8823d" />
+
+<img width="1919" height="1032" alt="image" src="https://github.com/user-attachments/assets/2a26c38d-d2e0-40dd-acb2-7d1c31687ced" />
+
+
+
+Về lý thuyết thì đến đây đã gần xong vì gần như đã fix được toàn bộ import, tuy nhiên:
+
+<img width="411" height="260" alt="image" src="https://github.com/user-attachments/assets/a1332a87-1f70-480b-b4b0-7dfd83cb15ec" />
+
+<img width="404" height="95" alt="image" src="https://github.com/user-attachments/assets/4b10eab6-b89b-446d-9d65-31f08bc3e482" />
+
+<img width="316" height="161" alt="image" src="https://github.com/user-attachments/assets/f743a174-b75b-40ca-81d6-6160e94035a9" />
+
+ta thấy chương trình push args vào stack nhưng lại call 2 lần, dẫn đến sai args
+
+chỉ cần sửa lại thành jmp là được 
+
+
 
 
 
